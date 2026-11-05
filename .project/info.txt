@@ -1,0 +1,2 @@
+name=ShojiWM
+description=The most customizable Wayland compositor with TypeScript(tsx).
