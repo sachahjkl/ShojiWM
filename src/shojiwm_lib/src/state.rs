@@ -3205,6 +3205,7 @@ impl ShojiWM {
             output_name: None,
             plasma: None,
             minimized_geometry: None,
+            toplevel_identifier: None,
             id: "__warmup__".into(),
             title: "warmup".into(),
             app_id: Some("shoji_wm.warmup".into()),

@@ -22,6 +22,8 @@ export interface WaylandWindowSnapshot {
   readonly plasma?: PlasmaSurfaceState;
   /** The window's taskbar entry (global logical px), from KDE's `set_minimized_geometry`. / KDE の `set_minimized_geometry` によるタスクバー上の位置（グローバル論理 px）。 */
   readonly minimizedGeometry?: WindowPosition;
+  /** The window's identifier on `ext-foreign-toplevel-list-v1`; absent before it is announced. / `ext-foreign-toplevel-list-v1` 上の識別子。告知前は省略。 */
+  readonly toplevelIdentifier?: string;
 }
 
 /** The `role` of KDE's `org_kde_plasma_surface.set_role`. / KDE の `org_kde_plasma_surface.set_role` の役割。 */
@@ -289,6 +291,12 @@ export interface WaylandWindow {
    * 行き先に使えます。
    */
   readonly minimizedGeometry: import("./signals").ReadonlySignal<WindowPosition | undefined>;
+  /**
+   * The window's identifier on `ext-foreign-toplevel-list-v1`, the id a
+   * taskbar client knows it by; `undefined` before it is announced there.
+   * `ext-foreign-toplevel-list-v1` 上の識別子（タスクバーが使う ID）。告知前は `undefined`。
+   */
+  readonly toplevelIdentifier: import("./signals").ReadonlySignal<string | undefined>;
   /** Window icon provided by the client or resolved from the desktop entry. / クライアントまたはデスクトップエントリから提供されるウィンドウアイコン。 */
   readonly icon: import("./signals").ReadonlySignal<WindowIcon | undefined>;
   /** Current pointer/drag interaction state for use in composition code. / 合成コードで使用するポインター・ドラッグの現在のインタラクション状態。 */
@@ -3569,6 +3577,7 @@ export interface ReactiveWaylandWindowSignals {
   parentId: import("./signals").ReadonlySignal<string | undefined>;
   plasma: import("./signals").ReadonlySignal<PlasmaSurfaceState | undefined>;
   minimizedGeometry: import("./signals").ReadonlySignal<WindowPosition | undefined>;
+  toplevelIdentifier: import("./signals").ReadonlySignal<string | undefined>;
   icon: import("./signals").ReadonlySignal<WindowIcon | undefined>;
   interaction: import("./signals").ReadonlySignal<WindowCompositionInteractionSnapshot>;
   output: import("./signals").ReadonlySignal<string | undefined>;

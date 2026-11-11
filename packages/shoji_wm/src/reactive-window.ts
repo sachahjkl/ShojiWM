@@ -42,6 +42,7 @@ interface MutableWindowSignals {
   parentId: Signal<string | undefined>;
   plasma: Signal<PlasmaSurfaceState | undefined>;
   minimizedGeometry: Signal<WindowPosition | undefined>;
+  toplevelIdentifier: Signal<string | undefined>;
   icon: Signal<WindowIcon | undefined>;
   interaction: Signal<WindowCompositionInteractionSnapshot>;
   decoration: Signal<WindowDecorationState>;
@@ -81,6 +82,7 @@ export function createReactiveWindow(
     parentId: signal(snapshot.parentId),
     plasma: signal(snapshot.plasma),
     minimizedGeometry: signal(snapshot.minimizedGeometry),
+    toplevelIdentifier: signal(snapshot.toplevelIdentifier),
     icon: signal(snapshot.icon),
     interaction: signal(snapshot.interaction),
     decoration: signal(snapshot.decoration),
@@ -183,6 +185,7 @@ export function createReactiveWindow(
     parentId: signals.parentId,
     plasma: signals.plasma,
     minimizedGeometry: signals.minimizedGeometry,
+    toplevelIdentifier: signals.toplevelIdentifier,
     icon: signals.icon,
     interaction: signals.interaction,
     decoration: signals.decoration,
@@ -262,6 +265,9 @@ export function createReactiveWindow(
           )
         ) {
           signals.minimizedGeometry.value = nextSnapshot.minimizedGeometry;
+        }
+        if (signals.toplevelIdentifier.peek() !== nextSnapshot.toplevelIdentifier) {
+          signals.toplevelIdentifier.value = nextSnapshot.toplevelIdentifier;
         }
         if (!shallowEqual(signals.icon.peek(), nextSnapshot.icon)) {
           signals.icon.value = nextSnapshot.icon;

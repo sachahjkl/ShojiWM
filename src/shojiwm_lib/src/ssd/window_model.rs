@@ -18,6 +18,14 @@ use smithay::{
 use super::DecorationInteractionSnapshot;
 use crate::state::ShojiWM;
 
+/// The `ext-foreign-toplevel-list-v1` identifier of a window, once it has a handle there.
+fn foreign_toplevel_identifier(window: &smithay::desktop::Window) -> Option<String> {
+    window
+        .user_data()
+        .get::<smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle>()
+        .map(|handle| handle.identifier().to_owned())
+}
+
 /// Rust-side snapshot that mirrors the TypeScript `WaylandWindow` view.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +60,10 @@ pub struct WaylandWindowSnapshot {
     /// set one. A config's minimize animation can fly the window there.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub minimized_geometry: Option<WindowPositionSnapshot>,
+    /// The window's `identifier` on `ext-foreign-toplevel-list-v1`, the id a taskbar knows it
+    /// by; `None` before it is announced there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toplevel_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -960,6 +972,7 @@ impl ShojiWM {
             interaction: DecorationInteractionSnapshot::default(),
             plasma: crate::protocols::plasma_shell::plasma_surface_snapshot(toplevel.wl_surface()),
             minimized_geometry: self.plasma_minimized_geometry(window),
+            toplevel_identifier: foreign_toplevel_identifier(window),
         }
     }
 
@@ -986,6 +999,7 @@ impl ShojiWM {
                 interaction: DecorationInteractionSnapshot::default(),
                 plasma: None,
                 minimized_geometry: None,
+                toplevel_identifier: None,
             };
         };
 
@@ -1063,6 +1077,7 @@ impl ShojiWM {
             interaction: DecorationInteractionSnapshot::default(),
             plasma: None,
             minimized_geometry: self.plasma_minimized_geometry(window),
+            toplevel_identifier: foreign_toplevel_identifier(window),
         }
     }
 
