@@ -11,7 +11,7 @@ branch leaves this list and `integration` is rebuilt on the new `main`.
 | `fix/resize-no-stretch` | to open | A forced slot larger than the client's buffer keeps the buffer at its own size, its edge texels filling the rest: a window that grows faster than its client draws is no longer stretched. |
 | `fix/foreign-toplevel-on-client-exit` | to open | A toplevel's taskbar handles close when its client disconnects, even if `space.refresh()` dropped the dead window first: no ghost button or thumbnail. |
 | `feat/decoration-middle-click` | to open | `onMiddleClick` on decoration nodes: a press of the middle button runs it, so a tab can close on a middle click. |
-| `fix/xwayland-stale-display-lock` | to open | A display lock left by a process that is gone is taken back, as Xorg does: killed sessions no longer use up the displays tried, which made the embedded satellite fall back to the built-in Xwayland ([#190](https://github.com/bea4dev/ShojiWM/pull/190)). |
+| `fix/xwayland-stale-display-lock` | [#229](https://github.com/bea4dev/ShojiWM/pull/229) | A display lock left by a process that is gone is taken back, as Xorg does: killed sessions no longer use up the displays tried, which made the embedded satellite fall back to the built-in Xwayland ([#190](https://github.com/bea4dev/ShojiWM/pull/190)). |
 
 Merged upstream: #184, #186, #187, #189, #192, #194; `WaylandWindow.foreignToplevelId` replaces
 the fork's `toplevelIdentifier`. Closed: #191, and #190 left open for the investigation above.
