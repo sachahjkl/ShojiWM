@@ -12,6 +12,7 @@ branch leaves this list and `integration` is rebuilt on the new `main`.
 | `fix/foreign-toplevel-on-client-exit` | to open | A toplevel's taskbar handles close when its client disconnects, even if `space.refresh()` dropped the dead window first: no ghost button or thumbnail. |
 | `feat/decoration-middle-click` | to open | `onMiddleClick` on decoration nodes: a press of the middle button runs it, so a tab can close on a middle click. |
 | `fix/xwayland-stale-display-lock` | [#229](https://github.com/bea4dev/ShojiWM/pull/229) | A display lock left by a process that is gone is taken back, as Xorg does: killed sessions no longer use up the displays tried, which made the embedded satellite fall back to the built-in Xwayland ([#190](https://github.com/bea4dev/ShojiWM/pull/190)). |
+| `fix/plasma-stacking-order` | [#232](https://github.com/bea4dev/ShojiWM/pull/232) | Plasma window management clients get the stacking order windows are drawn in, not their creation order: a screenshot tool framing the window under the pointer no longer picks one that is behind another. |
 
 Merged upstream: #184, #186, #187, #189, #192, #194; `WaylandWindow.foreignToplevelId` replaces
 the fork's `toplevelIdentifier`. Closed: #191, and #190 left open for the investigation above.
