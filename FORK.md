@@ -14,6 +14,7 @@ branch leaves this list and `integration` is rebuilt on the new `main`.
 | `fix/xwayland-stale-display-lock` | [#229](https://github.com/bea4dev/ShojiWM/pull/229) | A display lock left by a process that is gone is taken back, as Xorg does: killed sessions no longer use up the displays tried, which made the embedded satellite fall back to the built-in Xwayland ([#190](https://github.com/bea4dev/ShojiWM/pull/190)). |
 | `fix/plasma-stacking-order` | [#232](https://github.com/bea4dev/ShojiWM/pull/232) | Plasma window management clients get the stacking order windows are drawn in, not their creation order: a screenshot tool framing the window under the pointer no longer picks one that is behind another. |
 | `fix/focus-during-client-destroy` | — | Keyboard focus changes asked while a toplevel's destruction is handled wait for the next turn of the event loop: a client that disconnected with the keyboard, while the config gave it to another window, made the compositor abort (a `leave` sent to its gone `wl_keyboard`). |
+| `fix/fifo-hidden-windows` | — | The `wp_fifo_v1` barriers of a window drawn on no output (minimized, hidden) are cleared at each refresh: a client drawing while hidden in FIFO mode froze (Papier after a copy). |
 
 Merged upstream: #184, #186, #187, #189, #192, #194; `WaylandWindow.foreignToplevelId` replaces
 the fork's `toplevelIdentifier`. Closed: #191, and #190 left open for the investigation above.
