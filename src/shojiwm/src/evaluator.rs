@@ -43,6 +43,7 @@ use shojiwm_lib::ssd::{
 use shojiwm_lib::{
     activation_environment::RuntimeEnvUpdates,
     config::RuntimeDisplayConfigUpdate,
+    gpu::{GpuSnapshot, RenderGpuChoice},
     keyboard_layout::KeyboardLayoutSnapshot,
     lid_switch::LidSwitchSnapshot,
     power::{PowerStateSnapshot, ResumeSnapshot},
@@ -69,6 +70,7 @@ pub struct EmbeddedDecorationEvaluator {
     keyboard_layout: Arc<Mutex<Option<KeyboardLayoutSnapshot>>>,
     lid_switch: Arc<Mutex<Option<LidSwitchSnapshot>>>,
     power_state: Arc<Mutex<Option<PowerStateSnapshot>>>,
+    gpu_state: Arc<Mutex<Option<Vec<GpuSnapshot>>>>,
     /// A resume the config has not heard of yet; resumes between two ticks
     /// come as one.
     pending_resume: Arc<Mutex<Option<ResumeSnapshot>>>,
@@ -117,6 +119,7 @@ struct EmbeddedDecorationRuntime {
     last_sent_keyboard_layout: Option<KeyboardLayoutSnapshot>,
     last_sent_lid_switch: Option<LidSwitchSnapshot>,
     last_sent_power_state: Option<PowerStateSnapshot>,
+    last_sent_gpu_state: Option<Vec<GpuSnapshot>>,
 }
 
 #[derive(serde::Serialize)]
@@ -140,6 +143,12 @@ enum RuntimeRequest<'a> {
         #[serde(rename = "requestId")]
         request_id: u64,
         client: &'a WindowDecorationClientSnapshot,
+    },
+    SelectRenderGpu {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        gpus: &'a [GpuSnapshot],
+        environment: &'a std::collections::BTreeMap<String, String>,
     },
     WindowClosed {
         #[serde(rename = "requestId")]
@@ -331,6 +340,18 @@ struct RuntimeWindowDecorationPolicyResponse {
     kind: String,
     ok: bool,
     decision: Option<WindowDecorationDecisionSnapshot>,
+    error: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct RuntimeSelectRenderGpuResponse {
+    #[serde(rename = "requestId")]
+    request_id: u64,
+    kind: String,
+    ok: bool,
+    /// `None`: ShojiWM's own pick.
+    #[serde(rename = "gpuId")]
+    gpu_id: Option<String>,
     error: Option<String>,
 }
 
@@ -901,6 +922,7 @@ impl EmbeddedDecorationEvaluator {
             keyboard_layout: Arc::new(Mutex::new(None)),
             lid_switch: Arc::new(Mutex::new(None)),
             power_state: Arc::new(Mutex::new(None)),
+            gpu_state: Arc::new(Mutex::new(None)),
             pending_resume: Arc::new(Mutex::new(None)),
             runtime_state_generation: Arc::new(AtomicU64::new(1)),
             pointer_move_async: Arc::new(PointerMoveAsyncDispatcher::default()),
@@ -919,6 +941,7 @@ impl EmbeddedDecorationEvaluator {
             keyboard_layout: Arc::new(Mutex::new(None)),
             lid_switch: Arc::new(Mutex::new(None)),
             power_state: Arc::new(Mutex::new(None)),
+            gpu_state: Arc::new(Mutex::new(None)),
             pending_resume: Arc::new(Mutex::new(None)),
             runtime_state_generation: Arc::new(AtomicU64::new(1)),
             pointer_move_async: Arc::new(PointerMoveAsyncDispatcher::default()),
@@ -1003,6 +1026,72 @@ impl EmbeddedDecorationEvaluator {
         if let Ok(mut current) = self.power_state.lock() {
             *current = Some(state);
         }
+    }
+
+    pub fn set_gpu_state(&self, gpus: Vec<GpuSnapshot>) {
+        if let Ok(mut current) = self.gpu_state.lock() {
+            *current = Some(gpus);
+        }
+    }
+
+    /// `COMPOSITOR.gpu.selectRender`, asked before `onEnable`: loads the config
+    /// (with the environment `onEnable` would apply first) if it is not yet.
+    pub fn select_render_gpu(
+        &self,
+        gpus: &[GpuSnapshot],
+    ) -> Result<RenderGpuChoice, DecorationEvaluationError> {
+        let mut runtime_guard = self.runtime.lock().map_err(|_| {
+            DecorationEvaluationError::RuntimeProtocol("runtime mutex poisoned".into())
+        })?;
+        let runtime = self.ensure_runtime(&mut runtime_guard)?;
+        let request_id = runtime.next_request_id;
+        runtime.next_request_id += 1;
+        let environment = runtime_environment_snapshot();
+        let request = serde_json::to_string(&RuntimeRequest::SelectRenderGpu {
+            request_id,
+            gpus,
+            environment: &environment,
+        })
+        .map_err(|err| DecorationEvaluationError::SnapshotSerialization(err.to_string()))?;
+        runtime.write_request(&request)?;
+
+        let Some(response) = runtime.read_response::<RuntimeSelectRenderGpuResponse>()? else {
+            let status = runtime
+                .child
+                .try_wait()?
+                .and_then(|status| status.code())
+                .unwrap_or(-1);
+            let stderr = runtime
+                .stderr_log
+                .lock()
+                .map(|stderr| stderr.clone())
+                .unwrap_or_default();
+            *runtime_guard = None;
+            return Err(DecorationEvaluationError::RuntimeFailed { status, stderr });
+        };
+        if response.request_id != request_id || response.kind != "selectRenderGpu" {
+            *runtime_guard = None;
+            return Err(DecorationEvaluationError::RuntimeProtocol(format!(
+                "mismatched render gpu response: expected {request_id}/selectRenderGpu, got {}/{}",
+                response.request_id, response.kind
+            )));
+        }
+        if !response.ok {
+            // The config did not load; `onEnable` loads it again and reports why.
+            *runtime_guard = None;
+            return Err(DecorationEvaluationError::RuntimeProtocol(
+                response
+                    .error
+                    .unwrap_or_else(|| "runtime returned failure".into()),
+            ));
+        }
+        // The resolver threw: the config itself is fine and stays loaded.
+        if let Some(error) = response.error {
+            return Err(DecorationEvaluationError::RuntimeProtocol(error));
+        }
+        Ok(response
+            .gpu_id
+            .map_or(RenderGpuChoice::Auto, RenderGpuChoice::Gpu))
     }
 
     pub fn push_resume(&self, resume: ResumeSnapshot) {
@@ -1326,6 +1415,7 @@ impl EmbeddedDecorationEvaluator {
             last_sent_keyboard_layout: None,
             last_sent_lid_switch: None,
             last_sent_power_state: None,
+            last_sent_gpu_state: None,
         })
     }
 
@@ -1924,6 +2014,7 @@ impl Clone for EmbeddedDecorationEvaluator {
             keyboard_layout: Arc::clone(&self.keyboard_layout),
             lid_switch: Arc::clone(&self.lid_switch),
             power_state: Arc::clone(&self.power_state),
+            gpu_state: Arc::clone(&self.gpu_state),
             pending_resume: Arc::clone(&self.pending_resume),
             runtime_state_generation: Arc::clone(&self.runtime_state_generation),
             pointer_move_async: Arc::clone(&self.pointer_move_async),
@@ -2949,6 +3040,11 @@ impl DecorationEvaluator for EmbeddedDecorationEvaluator {
             .lock()
             .map(|state| state.clone())
             .unwrap_or_default();
+        let gpu_state = self
+            .gpu_state
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or_default();
         let resume = self
             .pending_resume
             .lock()
@@ -2957,10 +3053,12 @@ impl DecorationEvaluator for EmbeddedDecorationEvaluator {
         let layout_changed = runtime.last_sent_keyboard_layout != keyboard_layout;
         let lid_changed = runtime.last_sent_lid_switch != lid_switch;
         let power_changed = runtime.last_sent_power_state != power_state;
+        let gpus_changed = runtime.last_sent_gpu_state != gpu_state;
         if runtime.last_sent_runtime_state_generation == runtime_state_generation
             && !layout_changed
             && !lid_changed
             && !power_changed
+            && !gpus_changed
             && resume.is_none()
         {
             runtime.write_scheduler_fast_request(
@@ -2997,6 +3095,11 @@ impl DecorationEvaluator for EmbeddedDecorationEvaluator {
                 lid_switch: if lid_changed { lid_switch } else { None },
                 power_state: if power_changed {
                     power_state.clone()
+                } else {
+                    None
+                },
+                gpus: if gpus_changed {
+                    gpu_state.clone()
                 } else {
                     None
                 },
@@ -3048,6 +3151,7 @@ impl DecorationEvaluator for EmbeddedDecorationEvaluator {
         runtime.last_sent_keyboard_layout = keyboard_layout;
         runtime.last_sent_lid_switch = lid_switch;
         runtime.last_sent_power_state = power_state;
+        runtime.last_sent_gpu_state = gpu_state;
 
         if managed_rect_debug_enabled() {
             info!(
@@ -5819,6 +5923,125 @@ COMPOSITOR.rendering.surfacePolicy = () => ({ opaqueRegion: "ignore" });
         );
     }
 
+    /// Scrolling a tiled strip by swipe moves its tiles through their
+    /// ManagedWindow rects alone: every step reports them managed-only, so the
+    /// compositor takes the managed-window path instead of re-evaluating each
+    /// tile's whole tree.
+    #[test]
+    fn tiled_scroll_swipe_reports_tiles_managed_only() {
+        use shojiwm_lib::ssd::window_model::{
+            GestureSwipeEventSnapshot, GestureSwipePhaseSnapshot,
+        };
+
+        let evaluator = real_config_evaluator();
+        let mut display_state = std::collections::BTreeMap::new();
+        display_state.insert("TEST-1".to_string(), test_output_snapshot("TEST-1"));
+        evaluator.set_display_state(display_state);
+        evaluator
+            .lifecycle_enable("reload", Some(&tiled_workspace_persisted_state()))
+            .expect("tiled lifecycle should succeed");
+        // Enough tiles to scroll; the last one opened has focus and the strip
+        // ends scrolled to it.
+        let ids = ["0xa", "0xb", "0xc", "0xd", "0xe", "0xf"];
+        let mut now = 0;
+        let mut previous: Option<&str> = None;
+        for id in ids {
+            let window = make_named_window(id, "kitty", false, false);
+            evaluator
+                .evaluate_window_preview(&window, now)
+                .expect("preview should evaluate");
+            if let Some(previous) = previous {
+                let unfocused = make_named_window(previous, "kitty", false, false);
+                evaluator
+                    .evaluate_window(&unfocused, now + 25)
+                    .expect("defocus evaluation should succeed");
+            }
+            let focused = make_named_window(id, "kitty", true, false);
+            evaluator
+                .evaluate_window(&focused, now + 50)
+                .expect("evaluation should succeed");
+            previous = Some(id);
+            now += 100;
+        }
+        // Past the open animations.
+        now += 2000;
+        for id in ids {
+            evaluator
+                .evaluate_cached_window(id, None, now, true)
+                .expect("cached evaluation should succeed");
+        }
+
+        let mut total_x = 0.0;
+        let mut swipe = |phase: GestureSwipePhaseSnapshot, delta_x: f64, timestamp: u64| {
+            total_x += delta_x;
+            GestureSwipeEventSnapshot {
+                phase,
+                fingers: 3,
+                position: None,
+                delta_x,
+                delta_y: 0.0,
+                total_x,
+                total_y: 0.0,
+                velocity_x: delta_x * 100.0,
+                velocity_y: 0.0,
+                output_name: Some("TEST-1".into()),
+                device: None,
+                timestamp,
+            }
+        };
+        now += 10;
+        evaluator
+            .gesture_swipe(&swipe(GestureSwipePhaseSnapshot::Begin, 0.0, now), now)
+            .expect("begin should evaluate");
+        // Scroll back towards the first tile, past the axis lock.
+        let mut previous_x = None;
+        for step in 0..6 {
+            now += 8;
+            let invocation = evaluator
+                .gesture_swipe(&swipe(GestureSwipePhaseSnapshot::Update, 15.0, now), now)
+                .expect("update should evaluate");
+            if step < 2 {
+                continue;
+            }
+            let mut dirty = invocation.dirty_window_ids.clone();
+            dirty.sort();
+            assert_eq!(dirty, ids, "step {step}: every tile moves");
+            let mut managed = invocation.dirty_managed_window_ids.clone();
+            managed.sort();
+            assert_eq!(
+                managed, ids,
+                "step {step}: the tiles only move, so none needs a full re-evaluation"
+            );
+            assert!(
+                invocation.dirty_window_node_ids.is_empty(),
+                "step {step}: no node changes: {:?}",
+                invocation.dirty_window_node_ids
+            );
+            // What the compositor then asks for: the managed window alone, at
+            // its new place.
+            for id in ids {
+                let result = evaluator
+                    .evaluate_cached_window(id, None, now, false)
+                    .expect("cached evaluation should succeed");
+                assert!(result.managed_window_only, "step {step}: {id} managed only");
+                if id == "0xa" {
+                    let x = result
+                        .managed_window
+                        .rect
+                        .expect("tiled window should have a managed rect")
+                        .x;
+                    if let Some(previous_x) = previous_x {
+                        assert!(
+                            x > previous_x,
+                            "step {step}: the strip scrolls: {previous_x} -> {x}"
+                        );
+                    }
+                    previous_x = Some(x);
+                }
+            }
+        }
+    }
+
     /// Frame-driven kinetic scrolling: ticks stamped with fractional frame
     /// times (the compositor's predicted presentation times) move the glide by
     /// exactly one frame's worth each, even with wall-clock requests that run
@@ -6870,6 +7093,153 @@ COMPOSITOR.event.onDisable((event) => event.persist("layouts", layouts));
             ])
         );
         drop(reloaded);
+        drop(evaluator);
+        std::fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    fn test_gpu(id: &str, card: &str, driver: &str, vendor_id: u32, device_id: u32) -> GpuSnapshot {
+        GpuSnapshot {
+            id: id.into(),
+            dynamic_card_id: card.into(),
+            render_node: Some(format!("/dev/dri/renderD12{}", &card[4..])),
+            vendor: shojiwm_lib::gpu::GpuVendor::Other,
+            vendor_id,
+            device_id,
+            driver: Some(driver.into()),
+            name: None,
+            boot_vga: driver == "i915",
+            removable: false,
+            outputs: vec!["eDP-1".into()],
+            is_render: driver == "i915",
+            in_use: true,
+        }
+    }
+
+    fn gpu_test_evaluator(test: &str, config: &str) -> (EmbeddedDecorationEvaluator, PathBuf) {
+        let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let test_dir =
+            std::env::temp_dir().join(format!("shojiwm-gpu-{test}-test-{}", std::process::id()));
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let config_path = test_dir.join("config.tsx");
+        std::fs::write(&config_path, config).unwrap();
+        let evaluator = EmbeddedDecorationEvaluator::for_paths(
+            repository_root.join("tools/decoration-runtime.ts"),
+            &config_path,
+        )
+        .with_working_dir(&repository_root);
+        (evaluator, test_dir)
+    }
+
+    #[test]
+    fn embedded_runtime_selects_the_render_gpu_and_reports_gpus() {
+        let (evaluator, test_dir) = gpu_test_evaluator(
+            "select",
+            r#"
+import { COMPOSITOR, Label } from "shoji_wm";
+COMPOSITOR.window.composition = () => <Label text="gpu test" />;
+const g = globalThis as { loads?: number };
+g.loads = (g.loads ?? 0) + 1;
+COMPOSITOR.gpu.selectRender((gpus) => gpus.find((gpu) => gpu.driver === "amdgpu"));
+const seen: string[][] = [];
+let render: string | undefined;
+let env: Record<string, string> = {};
+COMPOSITOR.event.onEnable(() => {
+  COMPOSITOR.gpu.onChange((gpus) => {
+    seen.push(gpus.map((gpu) => gpu.dynamicCardId));
+    render = COMPOSITOR.gpu.render?.id;
+    const dgpu = COMPOSITOR.gpu.get("pci-0000:03:00.0");
+    if (dgpu) env = COMPOSITOR.gpu.offloadEnv(dgpu);
+  });
+});
+COMPOSITOR.event.onDisable((event) => {
+  event.persist("loads", g.loads);
+  event.persist("seen", seen);
+  event.persist("render", render);
+  event.persist("env", env);
+});
+"#,
+        );
+        let gpus = vec![
+            test_gpu("pci-0000:00:02.0", "card1", "i915", 0x8086, 0x46a6),
+            test_gpu("pci-0000:03:00.0", "card0", "amdgpu", 0x1002, 0x747e),
+        ];
+        // Asked before enable, which loads the config only once.
+        assert_eq!(
+            evaluator.select_render_gpu(&gpus).unwrap(),
+            RenderGpuChoice::Gpu("pci-0000:03:00.0".into())
+        );
+        evaluator.lifecycle_enable("initial", None).unwrap();
+        evaluator.scheduler_tick(1.0, None, &[]).unwrap();
+        evaluator.set_gpu_state(gpus.clone());
+        evaluator.scheduler_tick(2.0, None, &[]).unwrap();
+        // Unchanged GPUs are not reported again.
+        evaluator.scheduler_tick(3.0, None, &[]).unwrap();
+        let state = evaluator.lifecycle_disable("reload").unwrap();
+        assert_eq!(state["loads"], serde_json::json!(1));
+        assert_eq!(state["seen"], serde_json::json!([["card1", "card0"]]));
+        assert_eq!(state["render"], serde_json::json!("pci-0000:00:02.0"));
+        assert_eq!(
+            state["env"],
+            serde_json::json!({ "DRI_PRIME": "pci-0000_03_00_0", "MESA_VK_DEVICE_SELECT": "1002:747e" })
+        );
+
+        // A reloaded config is told the GPUs again.
+        let reloaded = evaluator.fresh_like();
+        reloaded.lifecycle_enable("reload", None).unwrap();
+        reloaded.scheduler_tick(4.0, None, &[]).unwrap();
+        let state = reloaded.lifecycle_disable("shutdown").unwrap();
+        assert_eq!(state["seen"], serde_json::json!([["card1", "card0"]]));
+        drop(reloaded);
+        drop(evaluator);
+        std::fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn embedded_runtime_render_gpu_choice_falls_back_without_breaking_the_config() {
+        let (evaluator, test_dir) = gpu_test_evaluator(
+            "throw",
+            r#"
+import { COMPOSITOR, Label } from "shoji_wm";
+COMPOSITOR.window.composition = () => <Label text="gpu test" />;
+const g = globalThis as { loads?: number };
+g.loads = (g.loads ?? 0) + 1;
+COMPOSITOR.gpu.selectRender(() => {
+  throw new Error("no GPU for you");
+});
+COMPOSITOR.event.onDisable((event) => event.persist("loads", g.loads));
+"#,
+        );
+        let gpus = vec![test_gpu(
+            "pci-0000:00:02.0",
+            "card1",
+            "i915",
+            0x8086,
+            0x46a6,
+        )];
+        let error = evaluator.select_render_gpu(&gpus).unwrap_err();
+        assert!(error.to_string().contains("no GPU for you"), "{error}");
+        // The config stays loaded: enable does not load it a second time.
+        evaluator.lifecycle_enable("initial", None).unwrap();
+        let state = evaluator.lifecycle_disable("shutdown").unwrap();
+        assert_eq!(state["loads"], serde_json::json!(1));
+        drop(evaluator);
+        std::fs::remove_dir_all(test_dir).unwrap();
+
+        // No resolver: ShojiWM's own pick.
+        let (evaluator, test_dir) = gpu_test_evaluator(
+            "auto",
+            r#"
+import { COMPOSITOR, Label } from "shoji_wm";
+COMPOSITOR.window.composition = () => <Label text="gpu test" />;
+"#,
+        );
+        assert_eq!(
+            evaluator.select_render_gpu(&gpus).unwrap(),
+            RenderGpuChoice::Auto
+        );
         drop(evaluator);
         std::fs::remove_dir_all(test_dir).unwrap();
     }
