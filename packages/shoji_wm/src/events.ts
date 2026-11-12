@@ -68,6 +68,24 @@ export interface KeyboardLayoutChangeEvent {
 
 export type KeyboardLayoutChangeListener = (event: KeyboardLayoutChangeEvent) => void;
 
+export interface LidSwitchEvent {
+  /** Whether the laptop lid is closed. */
+  readonly closed: boolean;
+  /**
+   * `true` when this is where the lid already was, not a movement: the state
+   * the switch reported when it came up (at startup, or back from another
+   * VT), or the state a reloaded config starts with. A broken switch can
+   * report closed this way while the lid is open, so act on movements only.
+   * 動きではなく、もともとの状態であることを表します（起動時や別の VT から戻ったときに
+   * スイッチが報告した状態、またはリロード後の設定が最初に受け取る状態）。壊れたスイッチは
+   * 蓋が開いていてもこの形で「閉じている」と報告することがあるため、動作のきっかけには
+   * `initial` でない通知だけを使ってください。
+   */
+  readonly initial: boolean;
+}
+
+export type LidSwitchListener = (event: LidSwitchEvent) => void;
+
 export interface WindowResizeEdges {
   left: boolean;
   right: boolean;
@@ -488,6 +506,14 @@ export interface CompositorEventController {
    */
   onKeyboardLayoutChange(listener: KeyboardLayoutChangeListener): () => void;
   /**
+   * Reports the laptop lid on the first scheduler tick after enable/reload and
+   * whenever it closes or opens. Nothing is reported until a lid switch does;
+   * a close and reopen between two ticks are coalesced. On its own this only
+   * reports: systemd-logind still suspends on the lid unless the config takes
+   * it with `COMPOSITOR.power.takeOver`.
+   */
+  onLidSwitch(listener: LidSwitchListener): () => void;
+  /**
    * Fires synchronously when the pointer moves, at most about once per display
    * refresh: faster motion is coalesced into one event with the latest position
    * and the combined `delta`. A listener always sees the latest position before
@@ -616,6 +642,8 @@ export interface CompositorEventController {
   /** @internal */
   emitKeyboardLayoutChange(event: KeyboardLayoutChangeEvent): void;
   /** @internal */
+  emitLidSwitch(event: LidSwitchEvent): void;
+  /** @internal */
   emitPointerMove(event: PointerMoveEvent): boolean;
   /** @internal */
   emitPointerMoveAsync(event: PointerMoveEvent): Promise<boolean>;
@@ -661,6 +689,7 @@ export function createCompositorEventController(): CompositorEventController {
   const outputChangeListeners = new Set<OutputChangeListener>();
   const inputDeviceChangeListeners = new Set<InputDeviceChangeListener>();
   const keyboardLayoutChangeListeners = new Set<KeyboardLayoutChangeListener>();
+  const lidSwitchListeners = new Set<LidSwitchListener>();
   const pointerMoveListeners = new Set<PointerMoveListener>();
   const pointerMoveAsyncListeners = new Set<PointerMoveAsyncListener>();
   const gestureSwipeListeners = new Set<GestureSwipeListener>();
@@ -743,6 +772,10 @@ export function createCompositorEventController(): CompositorEventController {
     onKeyboardLayoutChange(listener) {
       keyboardLayoutChangeListeners.add(listener);
       return () => keyboardLayoutChangeListeners.delete(listener);
+    },
+    onLidSwitch(listener) {
+      lidSwitchListeners.add(listener);
+      return () => lidSwitchListeners.delete(listener);
     },
     onPointerMove(listener) {
       pointerMoveListeners.add(listener);
@@ -890,6 +923,11 @@ export function createCompositorEventController(): CompositorEventController {
     },
     emitKeyboardLayoutChange(event) {
       for (const listener of keyboardLayoutChangeListeners) {
+        listener(event);
+      }
+    },
+    emitLidSwitch(event) {
+      for (const listener of lidSwitchListeners) {
         listener(event);
       }
     },

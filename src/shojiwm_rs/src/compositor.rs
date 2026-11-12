@@ -28,6 +28,7 @@ use shojiwm_lib::{
     cursor::RuntimeCursorConfigUpdate,
     headless_output::RuntimeHeadlessOutputRequest,
     keyboard_layout::{KeyboardLayoutSnapshot, KeyboardLocksSnapshot},
+    lid_switch::LidSwitchSnapshot,
     output_power::RuntimeOutputPowerRequest,
     runtime_api::HostMessage,
     runtime_input::{RuntimeInputConfig, RuntimeInputDeviceSnapshot},
@@ -90,6 +91,7 @@ pub struct Compositor {
     pub debug: DebugController,
     pub dnd: crate::dnd::DndController,
     pub session: SessionController,
+    pub power: crate::power::PowerController,
 }
 
 /// The one compositor. Use it like the TypeScript global.
@@ -110,6 +112,7 @@ pub const COMPOSITOR: Compositor = Compositor {
     debug: DebugController,
     dnd: crate::dnd::DndController,
     session: SessionController,
+    power: crate::power::PowerController,
 };
 
 /// Passed to [`Compositor::on_enable`] listeners.
@@ -840,6 +843,11 @@ impl InputController {
         runtime::global().keyboard_locks.read_only()
     }
 
+    /// The laptop lid (`None` until a lid switch reports).
+    pub fn lid_switch(&self) -> ReadSignal<Option<LidSwitchSnapshot>> {
+        runtime::global().lid_switch.read_only()
+    }
+
     /// Take all keyboard, pointer button, scroll and swipe input until
     /// [`InputGrab::release`]; see [`crate::input_grab`]. A new grab
     /// replaces (and cancels) the current one.
@@ -1438,6 +1446,8 @@ listeners! {
     on_keyboard_layout_change => keyboard_layout: &KeyboardLayoutSnapshot;
     /// Caps Lock or Num Lock was switched on or off.
     on_keyboard_locks_change => keyboard_locks: &KeyboardLocksSnapshot;
+    /// The laptop lid was closed or opened.
+    on_lid_switch => lid_switch: &LidSwitchSnapshot;
     on_create_layer => create_layer: &WaylandLayerSnapshot;
     on_update_layer => update_layer: &WaylandLayerSnapshot;
     on_destroy_layer => destroy_layer: &WaylandLayerSnapshot;

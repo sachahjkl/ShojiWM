@@ -552,6 +552,15 @@ pub struct ShojiWM {
     pub pending_tap_binding_ids: Vec<String>,
     /// A pointer focus refresh waits in an idle callback.
     pub pointer_focus_refresh_queued: bool,
+    /// The lid switch's last state; `None` until one reports.
+    pub lid_closed: Option<bool>,
+    /// Whether `lid_closed` is the state the switch came up in rather than a
+    /// movement (see [`crate::lid_switch::LidSwitchSnapshot::initial`]).
+    pub lid_initial: bool,
+    /// Until when a lid toggle is a newly added switch reporting its state.
+    pub lid_switch_initial_until: Option<Instant>,
+    /// logind and the power supplies (see [`crate::power`]).
+    pub power: crate::power::PowerState,
     pub suggested_window_offset: Option<(i32, i32)>,
     pub async_asset_dirty: bool,
     pub configured_background_effect: Option<BackgroundEffectConfig>,
@@ -618,6 +627,9 @@ pub struct ShojiWM {
     /// most recent windows swapped places (issue #92).
     pub session_lock_focus_owner: Option<WlSurface>,
     pub window_keyboard_focus: Option<WlSurface>,
+    /// A toplevel's destruction is being handled: keyboard focus changes wait for the next turn of
+    /// the event loop (see `XdgShellHandler::toplevel_destroyed`).
+    pub(crate) destroying_toplevel: bool,
     /// Root surfaces of the windows the user has actually *used*, most recent
     /// first.
     ///
@@ -1513,6 +1525,12 @@ impl ShojiWM {
     }
 
     pub fn update_keyboard_focus(&mut self, serial: smithay::utils::Serial) {
+        if self.destroying_toplevel {
+            self.loop_handle.insert_idle(|state| {
+                state.update_keyboard_focus(SERIAL_COUNTER.next_serial());
+            });
+            return;
+        }
         if self.session_lock_active {
             self.focus_session_lock_surface(serial);
             return;
@@ -1859,6 +1877,7 @@ impl ShojiWM {
             // Started locked (a login screen made of the lock screen): only
             // lock surfaces are drawn until a locker locks and unlocks.
             session_lock_active: runtime.start_locked(),
+            destroying_toplevel: false,
             session_locker: None,
             initial_config_enabled: false,
             session_lock_surfaces: HashMap::new(),
@@ -1987,6 +2006,10 @@ impl ShojiWM {
             modifier_tap: Default::default(),
             pending_tap_binding_ids: Vec::new(),
             pointer_focus_refresh_queued: false,
+            lid_closed: None,
+            lid_initial: false,
+            lid_switch_initial_until: None,
+            power: Default::default(),
             suggested_window_offset: None,
             async_asset_dirty: false,
             configured_background_effect: None,
@@ -2871,6 +2894,7 @@ impl ShojiWM {
     fn tick_runtime_scheduler_at(&mut self, force: bool, frame: Option<(&str, f64)>) -> u64 {
         let frame_time_ms = frame.map(|(_, time)| time);
         self.sync_keyboard_state();
+        self.sync_lid_switch();
         self.refresh_runtime_processes();
         let managed_window_animation_active = !self.managed_window_animations.is_empty();
         if !force
@@ -3125,6 +3149,7 @@ impl ShojiWM {
                 HostMessage::OutputPower(request) => {
                     self.apply_runtime_output_power_request(request);
                 }
+                HostMessage::Power(request) => self.apply_runtime_power_request(request),
                 HostMessage::HeadlessOutput(request) => {
                     self.apply_runtime_headless_output_request(request);
                 }
@@ -3383,8 +3408,10 @@ impl ShojiWM {
         // any: start from none, so the old config's do not stay on.
         self.apply_runtime_event_config_update(RuntimeEventConfigUpdate::default());
         self.sync_runtime_display_state();
+        self.power_reload_starting();
         let reload_result = self.config_runtime.reload();
         self.drain_runtime_host_messages();
+        self.power_reload_finished(reload_result.is_ok());
         if let Err(error) = reload_result {
             self.report_hot_reload_failure(error);
             return;

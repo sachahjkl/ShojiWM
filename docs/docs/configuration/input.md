@@ -88,6 +88,36 @@ does not choose a transport or write a status file. Configurations using the
 earlier draft's `shojiwm-$WAYLAND_DISPLAY-keyboard.json` must now publish that
 file from TypeScript or migrate their panel to IPC.
 
+## The laptop lid
+
+`COMPOSITOR.event.onLidSwitch` reports the lid closing and opening, so a config
+can switch the built-in panel off while the lid is down:
+
+```ts
+COMPOSITOR.event.onLidSwitch(({closed}) => {
+  COMPOSITOR.output.setPower(closed ? 'off' : 'on', {output: 'eDP-1'});
+});
+```
+
+Like the layout above, it arrives on a scheduler tick: the current state on the
+first tick after enable or a reload, then each change. Nothing is reported
+until the lid switch first reports, so a machine without one never sees the
+event; a close and reopen between two ticks are coalesced. Registration returns
+an unsubscribe function. In a Rust config it is
+`COMPOSITOR.event.on_lid_switch(|lid| ...)`, delivered at once, and
+`COMPOSITOR.input.lid_switch()` is a signal holding the last state (`None`
+before the first report).
+
+`initial` is `true` when the event tells where the lid already was rather than
+a movement: the state the switch reported when it came up (at startup, or back
+from another VT), or the state a reloaded config starts with. Some laptops'
+switches report closed this way while the lid is open, so start actions only on
+events with `initial: false`.
+
+These events only report the lid: systemd-logind still suspends on it as
+`logind.conf` says, in no defined order with the config. To decide what the lid
+does, take it from logind; see [Power and the lid](power.md).
+
 ## Pointer (mouse) settings
 
 `pointer` — an `InputDeviceConfig.pointer` object.
