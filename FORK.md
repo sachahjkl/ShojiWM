@@ -1,0 +1,25 @@
+# sachahjkl/ShojiWM, branch `integration`
+
+This branch is upstream `main` (bea4dev/ShojiWM) with fixes that wait for review. Each fix
+lives on its own branch; this branch only merges them. When a fix is merged upstream, its
+branch leaves this list and `integration` is rebuilt on the new `main`.
+
+| Branch | Pull request | What it changes |
+| --- | --- | --- |
+| `fix/foreign-toplevel-on-first-buffer` | [#241](https://github.com/bea4dev/ShojiWM/pull/241) | A toplevel shows on taskbars from its first buffer, not from its role: a program started hidden has no button. |
+| `fix/dmabuf-feedback-unchanged` | [#242](https://github.com/bea4dev/ShojiWM/pull/242) | A surface's dmabuf feedback is sent only when it changes: smithay's `set_feedback` compared the format tables on every frame ([#185](https://github.com/bea4dev/ShojiWM/issues/185)). |
+| `fix/resize-no-stretch` | [#243](https://github.com/bea4dev/ShojiWM/pull/243) | A forced slot larger than the client's buffer keeps the buffer at its own size, its edge texels filling the rest: a window that grows faster than its client draws is no longer stretched. |
+| `feat/decoration-middle-click` | [#244](https://github.com/bea4dev/ShojiWM/pull/244) | `onMiddleClick` on decoration nodes: a press of the middle button runs it, so a tab can close on a middle click. |
+| `fix/fifo-hidden-windows` | [#236](https://github.com/bea4dev/ShojiWM/pull/236) | The `wp_fifo_v1` barriers of a window drawn on no output (minimized, hidden) are cleared at each refresh: a client drawing while hidden in FIFO mode froze (Papier after a copy). |
+| `fix/foreign-toplevel-on-client-exit` | [#245](https://github.com/bea4dev/ShojiWM/pull/245) | A toplevel's taskbar handles close when its client disconnects, even if `space.refresh()` dropped the dead window first: no ghost button or thumbnail. |
+| `feat/cursor-capture-session` | [#246](https://github.com/bea4dev/ShojiWM/pull/246) | Cursor capture sessions (ext-image-copy-capture-v1) are kept and told where the pointer is on their output or window: a screenshot tool takes the screen under the pointer, which Wayland tells no client otherwise. |
+| `fix/xwayland-stale-display-lock` | [#229](https://github.com/bea4dev/ShojiWM/pull/229) | A display lock left by a process that is gone is taken back, as Xorg does: killed sessions no longer use up the displays tried, which made the embedded satellite fall back to the built-in Xwayland ([#190](https://github.com/bea4dev/ShojiWM/pull/190)). |
+| `fix/plasma-stacking-order` | [#232](https://github.com/bea4dev/ShojiWM/pull/232) | Plasma window management clients get the stacking order windows are drawn in, not their creation order: a screenshot tool framing the window under the pointer no longer picks one that is behind another. |
+| `feat/keyboard-num-lock` | [#239](https://github.com/bea4dev/ShojiWM/pull/239) | `keyboard.numLock` in the global input config: Num Lock on or off when the session starts, or as it was at the end of the last one (`restore`); a keymap change keeps it. |
+| `feat/portal-external-picker` | [#238](https://github.com/bea4dev/ShojiWM/pull/238) | The ScreenCast portal runs `SHOJIWM_PORTAL_PICKER`, when it is set, instead of its own picker: the sources go to the command as JSON on its stdin, the chosen id comes back on its stdout. A desktop shows the choice in its own look. |
+| `fix/nixos-portal-service-path` | [#248](https://github.com/bea4dev/ShojiWM/pull/248) | The NixOS module uses the packaged `xdg-desktop-portal-shojiwm.service` unit instead of redefining it under `systemd.user.services`, so the portal keeps the session `PATH` instead of NixOS's minimal default. |
+
+Merged upstream: #184, #186, #187, #189, #192, #194; `WaylandWindow.foreignToplevelId` replaces
+the fork's `toplevelIdentifier`. Fixed upstream in its own way: the keyboard focus change during a
+client's destruction (fbb5434), which `fix/focus-during-client-destroy` did. Closed: #191, and
+#190 left open for the investigation above.
