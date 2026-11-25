@@ -205,6 +205,7 @@ impl XdgShellHandler for ShojiWM {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl_surface = surface.wl_surface();
+        self.toplevel_drag_toplevel_destroyed(surface.xdg_toplevel());
         // From the toplevel registry, not the space: a client that disconnects can have its
         // dead window dropped by `space.refresh()` before this destructor runs, and that
         // window's taskbar handles must be closed all the same.

@@ -300,6 +300,7 @@ pub struct ShojiWM {
     pub tearing_control_state: crate::protocols::tearing_control::TearingControlManagerState,
     pub output_power_manager_state: crate::protocols::output_power::OutputPowerManagerState,
     pub gamma_control_manager_state: crate::protocols::gamma_control::GammaControlManagerState,
+    pub toplevel_drag_manager_state: crate::protocols::toplevel_drag::ToplevelDragManagerState,
     /// Gamma ramps a wlr-gamma-control client set, by output name.
     pub gamma_ramps: HashMap<String, Vec<u16>>,
     /// Outputs whose panel is switched off (DPMS), by name; see [`crate::output_power`].
@@ -564,6 +565,8 @@ pub struct ShojiWM {
     pub runtime_dnd_enabled: bool,
     /// The drag in progress and the drag views the config shows.
     pub dnd: crate::dnd::DndState,
+    /// The drag in progress carries a window (xdg-toplevel-drag-v1).
+    pub(crate) toplevel_drag: Option<crate::toplevel_drag::ActiveToplevelDrag>,
     pub runtime_gesture_swipe: Option<RuntimeGestureSwipeState>,
     /// The config's input grab (`COMPOSITOR.input.grab`), if one is held.
     pub runtime_input_grab: Option<crate::runtime_input_grab::RuntimeInputGrabState>,
@@ -1728,6 +1731,8 @@ impl ShojiWM {
         crate::protocols::virtual_pointer::VirtualPointerManagerState::new::<Self>(&dh);
         let gamma_control_manager_state =
             crate::protocols::gamma_control::GammaControlManagerState::new::<Self>(&dh);
+        let toplevel_drag_manager_state =
+            crate::protocols::toplevel_drag::ToplevelDragManagerState::new::<Self>(&dh);
         let color_management_state =
             crate::protocols::color_management::ColorManagementState::new::<Self>(&dh);
         let foreign_toplevel_list_state =
@@ -1904,6 +1909,7 @@ impl ShojiWM {
             tearing_control_state,
             output_power_manager_state,
             gamma_control_manager_state,
+            toplevel_drag_manager_state,
             gamma_ramps: HashMap::new(),
             powered_off_outputs: HashMap::new(),
             headless_outputs: Vec::new(),
@@ -2054,6 +2060,7 @@ impl ShojiWM {
             runtime_gesture_pinch_fingers: 0,
             runtime_dnd_enabled: false,
             dnd: Default::default(),
+            toplevel_drag: None,
             runtime_gesture_swipe: None,
             runtime_input_grab: None,
             pending_input_grab_key_event: None,
@@ -3673,6 +3680,34 @@ impl ShojiWM {
                             .output_color
                             .get(&name)
                             .is_some_and(|color| color.edid_hdr.is_some()),
+                        hdr_capabilities: self
+                            .output_color
+                            .get(&name)
+                            .and_then(|color| color.edid_hdr)
+                            .map(|edid| crate::ssd::HdrCapabilitiesSnapshot {
+                                pq: edid.supports_pq,
+                                hlg: edid.supports_hlg,
+                                max_luminance: edid.max_luminance,
+                                max_frame_average_luminance: edid.max_frame_avg_luminance,
+                                min_luminance: edid.min_luminance,
+                                max_sdr_luminance: edid.max_sdr_luminance,
+                            }),
+                        hdr: self
+                            .output_color
+                            .get(&name)
+                            .and_then(|color| match color.mode {
+                                crate::color::OutputColorMode::Hdr10 {
+                                    max_display_luminance,
+                                    min_display_luminance,
+                                    sdr_white_luminance,
+                                    ..
+                                } => Some(crate::ssd::HdrStateSnapshot {
+                                    max_luminance: max_display_luminance,
+                                    min_luminance: min_display_luminance,
+                                    sdr_luminance: sdr_white_luminance,
+                                }),
+                                crate::color::OutputColorMode::Sdr => None,
+                            }),
                         hdmi: self
                             .output_color
                             .get(&name)
@@ -4098,14 +4133,15 @@ impl ShojiWM {
     }
 
     /// A panel backlight changed. HDR10 outputs whose SDR white follows the
-    /// backlight re-resolve it (see `crate::backlight`); nothing else cares.
+    /// backlight re-resolve it (see `crate::backlight`), and the config sees
+    /// the new SDR white in the output state.
     pub fn backlight_changed(&mut self) {
         let any_hdr = self
             .output_color
             .values()
             .any(|color| matches!(color.mode, crate::color::OutputColorMode::Hdr10 { .. }));
-        if any_hdr {
-            crate::backend::tty::refresh_tty_output_color_modes(self);
+        if any_hdr && crate::backend::tty::refresh_tty_output_color_modes(self) {
+            self.sync_runtime_display_state();
         }
     }
 
@@ -4857,7 +4893,7 @@ impl ShojiWM {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        for window in self.windows_top_to_bottom() {
+        for window in self.hit_test_windows_top_to_bottom() {
             let Some(location) = self.space.element_location(window) else {
                 continue;
             };
@@ -4946,7 +4982,7 @@ impl ShojiWM {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        for window in self.windows_top_to_bottom() {
+        for window in self.hit_test_windows_top_to_bottom() {
             let Some(location) = self.space.element_location(window) else {
                 continue;
             };
@@ -5071,7 +5107,8 @@ impl ShojiWM {
         logical_pos: LogicalPoint,
     ) -> Option<(&Window, &WindowDecorationState)> {
         let pos = Point::<f64, Logical>::from((f64::from(logical_pos.x), f64::from(logical_pos.y)));
-        self.windows_top_to_bottom().into_iter().find_map(|window| {
+        let windows = self.hit_test_windows_top_to_bottom();
+        windows.into_iter().find_map(|window| {
             let decoration = self.window_decorations.get(window)?;
             if !self.decoration_allows_input_at(decoration, pos) {
                 return None;
@@ -5157,7 +5194,8 @@ impl ShojiWM {
 
     pub fn raw_window_under(&self, logical_pos: LogicalPoint) -> Option<(&Window, LogicalRect)> {
         let pos = Point::<f64, Logical>::from((f64::from(logical_pos.x), f64::from(logical_pos.y)));
-        self.windows_top_to_bottom().into_iter().find_map(|window| {
+        let windows = self.hit_test_windows_top_to_bottom();
+        windows.into_iter().find_map(|window| {
             if let Some(decoration) = self.window_decorations.get(window)
                 && !self.decoration_allows_input_at(decoration, pos)
             {
@@ -5196,6 +5234,16 @@ impl ShojiWM {
 
     pub fn windows_top_to_bottom(&self) -> Vec<&Window> {
         self.sorted_windows_top_to_bottom(self.space.elements())
+    }
+
+    /// The windows the pointer can land on, top first: all but the one a
+    /// toplevel drag carries, which must not become its own drop target.
+    pub fn hit_test_windows_top_to_bottom(&self) -> Vec<&Window> {
+        let mut windows = self.windows_top_to_bottom();
+        if let Some(dragged) = self.dragged_toplevel_surface() {
+            windows.retain(|window| !Self::is_window_root_surface(window, &dragged));
+        }
+        windows
     }
 
     pub fn windows_for_output_top_to_bottom<'a>(&'a self, output: &'a Output) -> Vec<&'a Window> {

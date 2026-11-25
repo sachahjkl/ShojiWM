@@ -125,6 +125,12 @@ directions and taps are rejected.
 COMPOSITOR.key.bind('volume-up', 'XF86AudioRaiseVolume', raiseVolume, {locked: true, repeat: true});
 ```
 
+Inside the handler, `COMPOSITOR.key.isRepeat()` (`COMPOSITOR.key.is_repeat()`
+in Rust) is true when it runs for the held key's repeat and false for the
+press, so one binding can act on the press alone or treat repeats differently.
+Read it in the handler's synchronous part: after an `await` the handler has
+returned and it reads false.
+
 In Rust the same options go through `bind_with`:
 
 ```rust
