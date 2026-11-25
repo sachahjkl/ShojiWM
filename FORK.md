@@ -18,6 +18,8 @@ branch leaves this list and `integration` is rebuilt on the new `main`.
 | `feat/keyboard-num-lock` | [#239](https://github.com/bea4dev/ShojiWM/pull/239) | `keyboard.numLock` in the global input config: Num Lock on or off when the session starts, or as it was at the end of the last one (`restore`); a keymap change keeps it. |
 | `feat/portal-external-picker` | [#238](https://github.com/bea4dev/ShojiWM/pull/238) | The ScreenCast portal runs `SHOJIWM_PORTAL_PICKER`, when it is set, instead of its own picker: the sources go to the command as JSON on its stdin, the chosen id comes back on its stdout. A desktop shows the choice in its own look. |
 | `fix/nixos-portal-service-path` | [#248](https://github.com/bea4dev/ShojiWM/pull/248) | The NixOS module uses the packaged `xdg-desktop-portal-shojiwm.service` unit instead of redefining it under `systemd.user.services`, so the portal keeps the session `PATH` instead of NixOS's minimal default. |
+| `feat/xdg-toplevel-drag` | [#249](https://github.com/bea4dev/ShojiWM/pull/249) | xdg-toplevel-drag-v1: a client's window follows the pointer with the data of its drag, so a tab pulled out of a window becomes a window under the pointer. |
+| `fix/fullscreen-above-top` | [#250](https://github.com/bea4dev/ShojiWM/pull/250) | The bar stays behind a fullscreen window drawn without direct scanout, and behind a borderless X11 window of the output's size. |
 
 Merged upstream: #184, #186, #187, #189, #192, #194; `WaylandWindow.foreignToplevelId` replaces
 the fork's `toplevelIdentifier`. Fixed upstream in its own way: the keyboard focus change during a
